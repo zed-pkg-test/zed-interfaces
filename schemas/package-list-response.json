@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PackageListResponse",
+  "description": "Response for `GET /v1/packages` (list all).",
+  "type": "object",
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PackageSummary"
+      }
+    },
+    "total": {
+      "description": "Total packages matching the filter (before limit/offset).",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "items",
+    "total"
+  ],
+  "$defs": {
+    "PackageSummary": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "latest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "org": {
+          "type": "string"
+        },
+        "tags": {
+          "description": "Free-form tags for filtering/discovery.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "org",
+        "name"
+      ]
+    }
+  }
+}

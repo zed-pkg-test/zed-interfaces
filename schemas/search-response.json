@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SearchResponse",
+  "type": "object",
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PackageSummary"
+      }
+    },
+    "query": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "query",
+    "items"
+  ],
+  "$defs": {
+    "PackageSummary": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "latest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "org": {
+          "type": "string"
+        },
+        "tags": {
+          "description": "Free-form tags for filtering/discovery.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "org",
+        "name"
+      ]
+    }
+  }
+}
