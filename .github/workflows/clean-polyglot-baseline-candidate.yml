@@ -21,6 +21,7 @@ concurrency:
 
 env:
   PRODUCT_REF: ${{ inputs.product_ref || '3884160215b3d5821a1977a7c8f3b958b3893003' }}
+  BASE_MAIN: f793e7c592373242dff9ab855845c42f526db9b4
   CARGO_TERM_COLOR: always
 
 jobs:
@@ -54,18 +55,21 @@ jobs:
           repository: zed-pkg/zed-interfaces
           ref: ${{ env.PRODUCT_REF }}
           path: product
-          fetch-depth: 1
+          fetch-depth: 3
           persist-credentials: false
           show-progress: false
 
-      - name: Verify immutable ref and clean provenance surface
+      - name: Verify immutable ref and clean successor delta
         run: |
           set -euo pipefail
           [[ "$PRODUCT_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$BASE_MAIN" =~ ^[0-9a-f]{40}$ ]]
           test "$(git -C product rev-parse HEAD)" = "$PRODUCT_REF"
-          test ! -e product/.claude
-          test ! -e product/.gemini
-          test ! -e product/.openai
+          test "$(git -C product merge-base "$BASE_MAIN" "$PRODUCT_REF")" = "$BASE_MAIN"
+          if git -C product diff --name-only "$BASE_MAIN..$PRODUCT_REF" | grep -Eq '^(\.claude/|\.gemini/|\.openai/)'; then
+            echo 'successor introduces snapshot/agent-history paths' >&2
+            exit 1
+          fi
           test ! -e product/.github/workflows/den-2735-materialize.yml
 
       - name: Install stable Rust with format and lint components
@@ -148,15 +152,21 @@ jobs:
           repository: zed-pkg/zed-interfaces
           ref: ${{ env.PRODUCT_REF }}
           path: product
-          fetch-depth: 1
+          fetch-depth: 3
           persist-credentials: false
           show-progress: false
 
-      - name: Verify immutable product ref
+      - name: Verify immutable product ref and provenance delta
         run: |
           set -euo pipefail
           [[ "$PRODUCT_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$BASE_MAIN" =~ ^[0-9a-f]{40}$ ]]
           test "$(git -C product rev-parse HEAD)" = "$PRODUCT_REF"
+          test "$(git -C product merge-base "$BASE_MAIN" "$PRODUCT_REF")" = "$BASE_MAIN"
+          if git -C product diff --name-only "$BASE_MAIN..$PRODUCT_REF" | grep -Eq '^(\.claude/|\.gemini/|\.openai/)'; then
+            echo 'successor introduces snapshot/agent-history paths' >&2
+            exit 1
+          fi
 
       - name: Install stable Rust
         run: |
@@ -229,7 +239,4 @@ jobs:
           test -f src/rust/tests/root_target_identity.rs
           test -f src/dart/lib/zed_interfaces.dart
           test -f src/ts/index.ts
-          test ! -e .claude
-          test ! -e .gemini
-          test ! -e .openai
           test ! -e .github/workflows/den-2735-materialize.yml
