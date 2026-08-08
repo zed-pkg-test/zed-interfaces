@@ -1,0 +1,88 @@
+name: Canonical root target candidate certification
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/canonical-root-target-candidate.yml
+  workflow_dispatch:
+    inputs:
+      product_ref:
+        description: Exact 40-character zed-pkg/zed-interfaces commit to certify
+        required: false
+        default: 5e85dab6759d6c6e70ae4ed734127739b3c05ab6
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: den-2963-root-target-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  PRODUCT_REF: ${{ inputs.product_ref || '5e85dab6759d6c6e70ae4ed734127739b3c05ab6' }}
+  CARGO_TERM_COLOR: always
+
+jobs:
+  certify:
+    name: Root target contract / ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            label: Linux
+          - os: windows-2025
+            label: Windows
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out certification repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Check out exact product candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: zed-pkg/zed-interfaces
+          ref: ${{ env.PRODUCT_REF }}
+          path: product
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify immutable product ref
+        run: |
+          set -euo pipefail
+          [[ "$PRODUCT_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C product rev-parse HEAD)" = "$PRODUCT_REF"
+
+      - name: Install stable Rust with format and lint components
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version --verbose
+          cargo --version --verbose
+
+      - name: Verify formatting
+        working-directory: product
+        run: cargo fmt --all --check
+
+      - name: Run canonical root target contract
+        working-directory: product
+        run: cargo test --locked --test root_target_identity -- --nocapture
+
+      - name: Reuse existing target regression suite
+        working-directory: product
+        run: cargo test --locked --test roundtrip target -- --nocapture
+
+      - name: Run strict library lint
+        working-directory: product
+        run: cargo clippy --locked --lib -- -D warnings
