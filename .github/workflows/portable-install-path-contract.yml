@@ -35,6 +35,7 @@ jobs:
       commit: ${{ steps.pin.outputs.commit }}
       source_file: ${{ steps.pin.outputs.source_file }}
       source_blob: ${{ steps.pin.outputs.source_blob }}
+      source_state: ${{ steps.pin.outputs.source_state }}
       patch: ${{ steps.pin.outputs.patch }}
       patch_blob: ${{ steps.pin.outputs.patch_blob }}
       expect_fixed: ${{ steps.pin.outputs.expect_fixed }}
@@ -57,6 +58,13 @@ jobs:
           commit="$(jq -r '.source.commit' "$fixture")"
           source_file="$(jq -r '.source.file // "src/environment_lock.rs"' "$fixture")"
           source_blob="$(jq -r '.source.environment_lock_blob' "$fixture")"
+          source_state="$(jq -r '
+            if .source.state then .source.state
+            elif ((.source.patch // "") | length) > 0 then "patch-candidate"
+            elif (.expect_fixed // false) then "materialized-repair"
+            else "known-bad"
+            end
+          ' "$fixture")"
           patch="$(jq -r '.source.patch // ""' "$fixture")"
           patch_blob="$(jq -r '.source.patch_blob // ""' "$fixture")"
           expect_fixed="$(jq -r '.expect_fixed // false' "$fixture")"
@@ -69,6 +77,13 @@ jobs:
           [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
           [[ "$source_blob" =~ ^[0-9a-f]{40}$ ]]
           [[ "$expect_fixed" = true || "$expect_fixed" = false ]]
+          case "$source_state" in
+            known-bad|patch-candidate|materialized-repair) ;;
+            *)
+              echo "::error::Unsupported source state: $source_state"
+              exit 1
+              ;;
+          esac
           test "$unsafe_test" = environment_lock::tests::unsafe_install_paths_are_rejected_cross_platform
           test "$(jq -r '.known_bad.escaping_case' "$fixture")" = /usr/bin
           test "$(jq -r '.repair_acceptance | length' "$fixture")" -ge 5
@@ -83,16 +98,34 @@ jobs:
                 ;;
             esac
           fi
+
           if [ "$expect_fixed" = true ]; then
-            test -n "$patch"
-            test -n "$patch_blob"
             test "$safe_test" = environment_lock::tests::valid_relative_install_paths_are_accepted_cross_platform
+            case "$source_state" in
+              patch-candidate)
+                test -n "$patch"
+                test -n "$patch_blob"
+                ;;
+              materialized-repair)
+                test -z "$patch"
+                test -z "$patch_blob"
+                ;;
+              *)
+                echo '::error::A fixed expectation requires a patch candidate or materialized repair.'
+                exit 1
+                ;;
+            esac
+          else
+            test "$source_state" = known-bad
+            test -z "$patch"
+            test -z "$patch_blob"
           fi
 
           echo "repository=$repository" >> "$GITHUB_OUTPUT"
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
           echo "source_file=$source_file" >> "$GITHUB_OUTPUT"
           echo "source_blob=$source_blob" >> "$GITHUB_OUTPUT"
+          echo "source_state=$source_state" >> "$GITHUB_OUTPUT"
           echo "patch=$patch" >> "$GITHUB_OUTPUT"
           echo "patch_blob=$patch_blob" >> "$GITHUB_OUTPUT"
           echo "expect_fixed=$expect_fixed" >> "$GITHUB_OUTPUT"
@@ -152,6 +185,7 @@ jobs:
       SOURCE_SHA: ${{ needs.pin-contract.outputs.commit }}
       SOURCE_FILE: ${{ needs.pin-contract.outputs.source_file }}
       SOURCE_BLOB: ${{ needs.pin-contract.outputs.source_blob }}
+      SOURCE_STATE: ${{ needs.pin-contract.outputs.source_state }}
       PATCH: ${{ needs.pin-contract.outputs.patch }}
       PATCH_BLOB: ${{ needs.pin-contract.outputs.patch_blob }}
       EXPECT_FIXED: ${{ needs.pin-contract.outputs.expect_fixed }}
@@ -175,7 +209,7 @@ jobs:
           persist-credentials: false
           show-progress: false
 
-      - name: Verify exact source commit, source blob, and patch blob
+      - name: Verify exact source commit, source blob, and optional patch blob
         shell: bash
         run: |
           set -euo pipefail
@@ -184,9 +218,11 @@ jobs:
           if [ -n "$PATCH" ]; then
             test -f "source/$PATCH"
             test "$(git hash-object "source/$PATCH")" = "$PATCH_BLOB"
+          else
+            test -z "$PATCH_BLOB"
           fi
 
-      - name: Apply the immutable lexical repair
+      - name: Apply or verify the immutable lexical repair
         id: apply
         shell: bash
         run: |
@@ -201,12 +237,26 @@ jobs:
               git diff --check
             )
           fi
+
           if [ "$EXPECT_FIXED" = true ]; then
-            test -n "$patch_sha256"
+            case "$SOURCE_STATE" in
+              patch-candidate)
+                test -n "$patch_sha256"
+                ;;
+              materialized-repair)
+                test -z "$patch_sha256"
+                git -C source diff --quiet
+                ;;
+              *)
+                echo "::error::Unexpected fixed source state: $SOURCE_STATE"
+                exit 1
+                ;;
+            esac
             ! grep -F 'Path::new(value).is_absolute()' "source/$SOURCE_FILE"
             grep -F 'let rooted = value.starts_with' "source/$SOURCE_FILE"
             grep -F 'valid_relative_install_paths_are_accepted_cross_platform' "source/$SOURCE_FILE"
           else
+            test "$SOURCE_STATE" = known-bad
             grep -F 'Path::new(value).is_absolute()' "source/$SOURCE_FILE"
           fi
           echo "patch_sha256=$patch_sha256" >> "$GITHUB_OUTPUT"
@@ -302,6 +352,7 @@ jobs:
             --arg source_repository "$SOURCE_REPOSITORY" \
             --arg source_sha "$SOURCE_SHA" \
             --arg source_blob "$SOURCE_BLOB" \
+            --arg source_state "$SOURCE_STATE" \
             --arg patch "$PATCH" \
             --arg patch_blob "$PATCH_BLOB" \
             --arg patch_sha256 "$PATCH_SHA256" \
@@ -310,11 +361,12 @@ jobs:
             --arg observation "$OBSERVATION" \
             --argjson expect_fixed "$EXPECT_FIXED" \
             '{
-              schema_version: 2,
+              schema_version: 3,
               linear: "DEN-2998",
               source_repository: $source_repository,
               source_sha: $source_sha,
               source_blob: $source_blob,
+              source_state: $source_state,
               patch: (if $patch == "" then null else $patch end),
               patch_blob: (if $patch_blob == "" then null else $patch_blob end),
               patch_sha256: (if $patch_sha256 == "" then null else $patch_sha256 end),
