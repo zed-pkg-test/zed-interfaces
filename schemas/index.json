@@ -11,6 +11,11 @@
       "why": "Error envelope of every registry endpoint; every client renders it."
     },
     {
+      "file": "dependency-graph-v1.json",
+      "targets": [],
+      "why": "Versioned graph download and resolver contract. Typed Dart/TypeScript SDK generation is deliberately deferred to DEN-2869 after format negotiation and projection behavior settle."
+    },
+    {
       "file": "package-metadata.json",
       "targets": ["dart", "ts"],
       "why": "GET /packages/{org}/{name} — the package detail page."
