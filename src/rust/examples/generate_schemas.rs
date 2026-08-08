@@ -37,6 +37,7 @@ fn main() {
     write::<zed_interfaces::NativeRegistryAdapterRecord>(dir, "native-registry-adapter-record");
     write::<zed_interfaces::NativeDependencyLock>(dir, "native-dependency-lock");
     write::<zed_interfaces::OciAdapterRecord>(dir, "oci-adapter-record");
+    write::<zed_interfaces::DependencyGraphDocument>(dir, "dependency-graph-v1");
     write::<zed_interfaces::registry::PackageMetadata>(dir, "package-metadata");
     write::<zed_interfaces::registry::VersionMetadata>(dir, "version-metadata");
     write::<zed_interfaces::registry::PublishMeta>(dir, "publish-meta");
