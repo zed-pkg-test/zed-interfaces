@@ -13,11 +13,13 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PRODUCT_REF: 85613d5ff7c2e397688d88d186d950009390d3fd
+  PRODUCT_REF: 0e53be69baf6134379138a50e52064dff07ff346
+  UNION_REF: 85613d5ff7c2e397688d88d186d950009390d3fd
   PREVIOUS_UNION: a9f747c6e1be1b5aba043cb81831e07b5d13df4b
   BASE_MAIN: a8aa3f944e267e3a49f207aad2be83ef000ab9b1
   CURRENT_VERSION_BLOB: 11217f77487b1a9d357a7859a0ded6613ecd60e0
   CURRENT_ENVIRONMENT_LOCK_BLOB: 6e048314d43fed763f15435bebbcb959a6a4bd19
+  NATIVE_REGISTRY_WORKFLOW_BLOB: 6e6d9fad649d7056eef887c77894aecc2193a257
   PORTABLE_PATH_TEST: environment_lock::tests::unsafe_install_paths_are_rejected_cross_platform
   CARGO_TERM_COLOR: always
 
@@ -46,28 +48,35 @@ jobs:
           persist-credentials: false
           show-progress: false
 
-      - name: Check out exact product union without persisted credentials
+      - name: Check out exact product candidate without persisted credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: zed-pkg/zed-interfaces
           ref: ${{ env.PRODUCT_REF }}
           path: product
-          fetch-depth: 8
+          fetch-depth: 12
           persist-credentials: false
           show-progress: false
 
-      - name: Verify exact semantic union, parents, and inherited blobs
+      - name: Verify exact semantic union, follow-up, and inherited blobs
         run: |
           set -euo pipefail
           test "$(git -C product rev-parse HEAD)" = "$PRODUCT_REF"
           test "$(git -C product merge-base "$BASE_MAIN" "$PRODUCT_REF")" = "$BASE_MAIN"
-          test "$(git -C product show -s --format=%P HEAD)" = "$PREVIOUS_UNION $BASE_MAIN"
+          test "$(git -C product show -s --format=%P "$PRODUCT_REF")" = "$UNION_REF"
+          test "$(git -C product show -s --format=%P "$UNION_REF")" = "$PREVIOUS_UNION $BASE_MAIN"
           test "$(git -C product hash-object src/rust/version.rs)" = "$CURRENT_VERSION_BLOB"
           test "$(git -C product hash-object src/rust/environment_lock.rs)" = "$CURRENT_ENVIRONMENT_LOCK_BLOB"
+          test "$(git -C product hash-object .github/workflows/native-registry.yml)" = "$NATIVE_REGISTRY_WORKFLOW_BLOB"
           test ! -e product/src/environment_lock.rs
           test ! -e product/.github/workflows/den-2735-materialize.yml
+          ! grep -F 'src/rust/src/rust' product/.github/workflows/native-registry.yml
+          grep -F 'src/rust/examples/generate_schemas.rs' product/.github/workflows/native-registry.yml
+          grep -F 'src/rust/tests/native_registry_schema_contract.rs' product/.github/workflows/native-registry.yml
+          grep -F 'git diff --cached --exit-code' product/.github/workflows/native-registry.yml
+          grep -F 'git ls-files --others --exclude-standard' product/.github/workflows/native-registry.yml
           if git -C product diff --name-only "$BASE_MAIN..$PRODUCT_REF" | grep -Eq '^(\.claude/|\.gemini/|\.openai/)'; then
-            echo 'union introduces snapshot/agent-history paths' >&2
+            echo 'candidate introduces snapshot/agent-history paths' >&2
             exit 1
           fi
 
@@ -117,6 +126,19 @@ jobs:
         working-directory: product
         run: cargo test --locked "$PORTABLE_PATH_TEST" -- --exact --nocapture
 
+      - name: Certify native-registry clean-tree logic on this host
+        working-directory: product
+        run: |
+          set -euo pipefail
+          git config core.autocrlf false
+          git config core.eol lf
+          git reset --hard HEAD
+          cargo run --locked --example generate_schemas
+          git diff --exit-code -- schemas fixtures
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+
       - name: Doctests and moved regressions
         working-directory: product
         run: |
@@ -143,13 +165,13 @@ jobs:
           persist-credentials: false
           show-progress: false
 
-      - name: Check out exact product union without persisted credentials
+      - name: Check out exact product candidate without persisted credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: zed-pkg/zed-interfaces
           ref: ${{ env.PRODUCT_REF }}
           path: product
-          fetch-depth: 8
+          fetch-depth: 12
           persist-credentials: false
           show-progress: false
 
@@ -158,9 +180,11 @@ jobs:
           set -euo pipefail
           test "$(git -C product rev-parse HEAD)" = "$PRODUCT_REF"
           test "$(git -C product merge-base "$BASE_MAIN" "$PRODUCT_REF")" = "$BASE_MAIN"
-          test "$(git -C product show -s --format=%P HEAD)" = "$PREVIOUS_UNION $BASE_MAIN"
+          test "$(git -C product show -s --format=%P "$PRODUCT_REF")" = "$UNION_REF"
+          test "$(git -C product show -s --format=%P "$UNION_REF")" = "$PREVIOUS_UNION $BASE_MAIN"
           test "$(git -C product hash-object src/rust/version.rs)" = "$CURRENT_VERSION_BLOB"
           test "$(git -C product hash-object src/rust/environment_lock.rs)" = "$CURRENT_ENVIRONMENT_LOCK_BLOB"
+          test "$(git -C product hash-object .github/workflows/native-registry.yml)" = "$NATIVE_REGISTRY_WORKFLOW_BLOB"
 
       - name: Install stable Rust
         run: |
