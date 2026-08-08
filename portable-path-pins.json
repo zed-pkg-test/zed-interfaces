@@ -4,11 +4,11 @@
   "source": {
     "repository": "zed-pkg/zed-interfaces",
     "branch": "agent/den-2998-portable-path-lexical",
-    "commit": "a15cc23722bebe91225630d2e8407b72c375ba1b",
+    "commit": "4301df7b89e2d53c9b87dddb1b2cc8f91ae7638f",
     "file": "src/environment_lock.rs",
     "environment_lock_blob": "b4ab7fde4497df17452281789df8c8f505e18abb",
     "patch": ".github/patches/den-2998-portable-path.patch",
-    "patch_blob": "b60407247f60d3d932a2fec26d0144b0b27edff7"
+    "patch_blob": "c6af0e3c786597d70b01fd580233771a76ef628c"
   },
   "focused_tests": {
     "unsafe": "environment_lock::tests::unsafe_install_paths_are_rejected_cross_platform",
