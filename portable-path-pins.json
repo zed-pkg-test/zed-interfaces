@@ -1,0 +1,22 @@
+{
+  "issue": "DEN-2998",
+  "source": {
+    "repository": "zed-pkg/zed-interfaces",
+    "commit": "5f915e19bee6e1bbd45a90fe3190d4eaa6b539ba",
+    "environment_lock_blob": "b4ab7fde4497df17452281789df8c8f505e18abb"
+  },
+  "known_bad": {
+    "test": "environment_lock::tests::unsafe_install_paths_are_rejected_cross_platform",
+    "linux_expected": "pass",
+    "windows_expected": "fail",
+    "escaping_case": "/usr/bin",
+    "reason": "On Windows std::path::Path::is_absolute returns false for a rooted path without a drive prefix; portable validation must reject leading separators lexically rather than delegating to the host parser."
+  },
+  "repair_acceptance": [
+    "Reject Unix-rooted paths on Linux and Windows",
+    "Reject Windows drive-qualified and UNC paths on Linux and Windows",
+    "Reject parent traversal using either separator",
+    "Accept valid relative executable paths",
+    "Run the focused product test successfully on native Linux and Windows at one exact repaired source commit"
+  ]
+}
