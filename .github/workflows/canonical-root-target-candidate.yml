@@ -9,7 +9,7 @@ on:
       product_ref:
         description: Exact 40-character zed-pkg/zed-interfaces commit to certify
         required: false
-        default: 5e85dab6759d6c6e70ae4ed734127739b3c05ab6
+        default: 66768b3f544c03f392d13ea812006c1efc93590b
         type: string
 
 permissions:
@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PRODUCT_REF: ${{ inputs.product_ref || '5e85dab6759d6c6e70ae4ed734127739b3c05ab6' }}
+  PRODUCT_REF: ${{ inputs.product_ref || '66768b3f544c03f392d13ea812006c1efc93590b' }}
   CARGO_TERM_COLOR: always
 
 jobs:
@@ -43,6 +43,7 @@ jobs:
       - name: Check out certification repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          path: cert
           fetch-depth: 1
           persist-credentials: false
           show-progress: false
