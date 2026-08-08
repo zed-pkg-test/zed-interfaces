@@ -22,14 +22,11 @@ pub const DEPENDENCY_GRAPH_SCHEMA_V1: &str = "zpkg/dependency-graph/v1";
 /// Response header carrying semantic graph identity across JSON/YAML/TOML.
 pub const DEPENDENCY_GRAPH_DIGEST_HEADER: &str = "x-zpkg-graph-digest";
 /// Canonical JSON representation media type.
-pub const DEPENDENCY_GRAPH_JSON_MEDIA_TYPE: &str =
-    "application/vnd.zpkg.dependency-graph.v1+json";
+pub const DEPENDENCY_GRAPH_JSON_MEDIA_TYPE: &str = "application/vnd.zpkg.dependency-graph.v1+json";
 /// Lossless safe-subset YAML representation media type.
-pub const DEPENDENCY_GRAPH_YAML_MEDIA_TYPE: &str =
-    "application/vnd.zpkg.dependency-graph.v1+yaml";
+pub const DEPENDENCY_GRAPH_YAML_MEDIA_TYPE: &str = "application/vnd.zpkg.dependency-graph.v1+yaml";
 /// Lossless normalized TOML representation media type.
-pub const DEPENDENCY_GRAPH_TOML_MEDIA_TYPE: &str =
-    "application/vnd.zpkg.dependency-graph.v1+toml";
+pub const DEPENDENCY_GRAPH_TOML_MEDIA_TYPE: &str = "application/vnd.zpkg.dependency-graph.v1+toml";
 
 fn dependency_graph_schema_v1() -> String {
     DEPENDENCY_GRAPH_SCHEMA_V1.to_string()
@@ -80,9 +77,7 @@ impl DependencyGraphFormat {
 
 /// Exact package identity. Registry identity is intrinsic, so remapping a
 /// local registry alias cannot reinterpret a graph node.
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 pub struct PackageVersionIdentity {
     pub registry_id: String,
     pub org: String,
@@ -114,9 +109,7 @@ pub enum DependencyKind {
 }
 
 /// One unresolved requirement from an immutable package manifest.
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 pub struct DeclaredDependency {
     pub registry_id: String,
     pub org: String,
@@ -149,9 +142,7 @@ pub enum DependencyGraphCompleteness {
 }
 
 /// A package selected by the resolver.
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 pub struct ResolvedDependencyNode {
     pub id: PackageVersionIdentity,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -161,9 +152,7 @@ pub struct ResolvedDependencyNode {
 }
 
 /// A selected edge between exact package versions.
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 pub struct ResolvedDependencyEdge {
     pub from: PackageVersionIdentity,
     pub to: PackageVersionIdentity,
@@ -179,9 +168,7 @@ pub struct ResolvedDependencyEdge {
 }
 
 /// Immutable registry metadata checkpoint consulted by the resolver.
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 pub struct RegistrySnapshot {
     pub registry_id: String,
     pub checkpoint_digest: String,
@@ -499,9 +486,7 @@ impl DependencyGraphDocument {
 
 /// `GET`/`HEAD` path for immutable declared requirements.
 pub fn declared_dependency_graph_path(org: &str, name: &str, version: &str) -> String {
-    format!(
-        "{API_V1}/packages/{org}/{name}/versions/{version}/dependency-graph?view=declared"
-    )
+    format!("{API_V1}/packages/{org}/{name}/versions/{version}/dependency-graph?view=declared")
 }
 
 /// `GET`/`HEAD` path for an immutable exact resolution artifact.
@@ -542,7 +527,13 @@ pub enum DependencyGraphError {
     #[error("canonical dependency graph JSON forbids non-integer number: {0}")]
     UnsupportedJsonNumber(String),
     #[error("dependency graph JSON serialization failed: {0}")]
-    Json(#[from] serde_json::Error),
+    Json(String),
+}
+
+impl From<serde_json::Error> for DependencyGraphError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Json(error.to_string())
+    }
 }
 
 fn sort_dedup<T: Ord>(values: &mut Vec<T>) {
@@ -557,23 +548,20 @@ fn validate_identity(identity: &PackageVersionIdentity) -> Result<(), Dependency
     validate_non_empty("package version", &identity.version)
 }
 
-fn validate_non_empty(
-    field: &'static str,
-    value: &str,
-) -> Result<(), DependencyGraphError> {
+fn validate_non_empty(field: &'static str, value: &str) -> Result<(), DependencyGraphError> {
     if value.trim().is_empty() {
         return Err(DependencyGraphError::EmptyField(field));
     }
     Ok(())
 }
 
-fn validate_sha256_digest(
-    field: &'static str,
-    value: &str,
-) -> Result<(), DependencyGraphError> {
-    let valid = value
-        .strip_prefix("sha256:")
-        .is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+fn validate_sha256_digest(field: &'static str, value: &str) -> Result<(), DependencyGraphError> {
+    let valid = value.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    });
     if !valid {
         return Err(DependencyGraphError::InvalidDigest {
             field,
@@ -589,10 +577,7 @@ fn canonical_json_bytes(value: &Value) -> Result<Vec<u8>, DependencyGraphError> 
     Ok(bytes)
 }
 
-fn write_canonical_json(
-    value: &Value,
-    bytes: &mut Vec<u8>,
-) -> Result<(), DependencyGraphError> {
+fn write_canonical_json(value: &Value, bytes: &mut Vec<u8>) -> Result<(), DependencyGraphError> {
     match value {
         Value::Null => bytes.extend_from_slice(b"null"),
         Value::Bool(value) => bytes.extend_from_slice(if *value { b"true" } else { b"false" }),

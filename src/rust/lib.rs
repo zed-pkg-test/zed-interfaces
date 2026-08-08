@@ -28,13 +28,12 @@ pub mod version;
 
 pub use artifact::ArtifactFormat;
 pub use dependency_graph::{
-    DEPENDENCY_GRAPH_DIGEST_HEADER, DEPENDENCY_GRAPH_JSON_MEDIA_TYPE,
-    DEPENDENCY_GRAPH_SCHEMA_V1, DEPENDENCY_GRAPH_TOML_MEDIA_TYPE,
-    DEPENDENCY_GRAPH_YAML_MEDIA_TYPE, DeclaredDependency, DependencyGraphCompleteness,
-    DependencyGraphData, DependencyGraphDocument, DependencyGraphError, DependencyGraphFormat,
-    DependencyGraphProjection, DependencyKind, PackageVersionIdentity, RegistrySnapshot,
-    ResolutionProvenance, ResolvedDependencyEdge, ResolvedDependencyNode,
-    declared_dependency_graph_path, resolution_dependency_graph_path,
+    DEPENDENCY_GRAPH_DIGEST_HEADER, DEPENDENCY_GRAPH_JSON_MEDIA_TYPE, DEPENDENCY_GRAPH_SCHEMA_V1,
+    DEPENDENCY_GRAPH_TOML_MEDIA_TYPE, DEPENDENCY_GRAPH_YAML_MEDIA_TYPE, DeclaredDependency,
+    DependencyGraphCompleteness, DependencyGraphData, DependencyGraphDocument,
+    DependencyGraphError, DependencyGraphFormat, DependencyGraphProjection, DependencyKind,
+    PackageVersionIdentity, RegistrySnapshot, ResolutionProvenance, ResolvedDependencyEdge,
+    ResolvedDependencyNode, declared_dependency_graph_path, resolution_dependency_graph_path,
 };
 pub use environment::{
     ActivationPolicy, Checksum, ChecksumAlgorithm, EnvironmentManager, EnvironmentPlan,
