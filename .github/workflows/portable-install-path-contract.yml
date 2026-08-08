@@ -1,0 +1,163 @@
+name: Portable install-path validation contract
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/portable-install-path-contract.yml
+      - portable-path-pins.json
+      - tests/path-host-semantics.rs
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: den-2998-portable-path-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  SOURCE_REPOSITORY: zed-pkg/zed-interfaces
+  SOURCE_SHA: 5f915e19bee6e1bbd45a90fe3190d4eaa6b539ba
+  SOURCE_FILE: src/environment_lock.rs
+  SOURCE_BLOB: b4ab7fde4497df17452281789df8c8f505e18abb
+  FOCUSED_TEST: environment_lock::tests::unsafe_install_paths_are_rejected_cross_platform
+  CARGO_TERM_COLOR: always
+
+jobs:
+  pin-contract:
+    name: Exact source and non-secret contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out certification repository without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          show-progress: false
+
+      - name: Validate immutable baseline and repair acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e \
+            --arg repository "$SOURCE_REPOSITORY" \
+            --arg commit "$SOURCE_SHA" \
+            --arg blob "$SOURCE_BLOB" \
+            --arg test "$FOCUSED_TEST" '
+              .issue == "DEN-2998" and
+              .source.repository == $repository and
+              .source.commit == $commit and
+              .source.environment_lock_blob == $blob and
+              .known_bad.test == $test and
+              .known_bad.linux_expected == "pass" and
+              .known_bad.windows_expected == "fail" and
+              .known_bad.escaping_case == "/usr/bin" and
+              (.repair_acceptance | length) >= 5
+            ' portable-path-pins.json >/dev/null
+          rustc --edition 2021 tests/path-host-semantics.rs \
+            -o "$RUNNER_TEMP/path-host-semantics-contract"
+          "$RUNNER_TEMP/path-host-semantics-contract" > "$RUNNER_TEMP/contract-output.txt"
+          grep -F '/usr/bin|absolute=true|root=true' "$RUNNER_TEMP/contract-output.txt"
+          ! grep -Eq '(gh[pousr]_[A-Za-z0-9]{20,}|lin_api_[A-Za-z0-9]{20,}|cfat_[A-Za-z0-9_-]{20,})' \
+            portable-path-pins.json tests/path-host-semantics.rs \
+            .github/workflows/portable-install-path-contract.yml
+
+  native-baseline:
+    name: Native known-bad baseline / ${{ matrix.label }}
+    needs: pin-contract
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            label: Linux
+          - os: windows-2025
+            label: Windows
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out certification repository without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: cert
+          persist-credentials: false
+          show-progress: false
+
+      - name: Check out exact public product source without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: zed-pkg/zed-interfaces
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact source commit and affected blob
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SOURCE_BLOB" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git -C source hash-object "$SOURCE_FILE")" = "$SOURCE_BLOB"
+          grep -F 'Path::new(value).is_absolute()' "source/$SOURCE_FILE"
+          grep -F 'value.starts_with("//")' "source/$SOURCE_FILE"
+
+      - name: Install stable Rust
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version --verbose
+          cargo --version --verbose
+
+      - name: Measure host parser semantics
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            out="$RUNNER_TEMP/path-host-semantics.exe"
+          else
+            out="$RUNNER_TEMP/path-host-semantics"
+          fi
+          rustc --edition 2021 cert/tests/path-host-semantics.rs -o "$out"
+          "$out" | tee "$RUNNER_TEMP/path-host-semantics.log"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            grep -F '/usr/bin|absolute=false|root=true' "$RUNNER_TEMP/path-host-semantics.log"
+            grep -F 'C:\tool\bin|absolute=true|root=true' "$RUNNER_TEMP/path-host-semantics.log"
+          else
+            grep -F '/usr/bin|absolute=true|root=true' "$RUNNER_TEMP/path-host-semantics.log"
+            grep -F 'C:\tool\bin|absolute=false|root=false' "$RUNNER_TEMP/path-host-semantics.log"
+          fi
+
+      - name: Run exact product regression and enforce the known baseline outcome
+        working-directory: source
+        run: |
+          set -uo pipefail
+          set +e
+          cargo test --locked "$FOCUSED_TEST" -- --exact --nocapture \
+            > "$RUNNER_TEMP/focused-test.log" 2>&1
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/focused-test.log"
+          grep -F "$FOCUSED_TEST" "$RUNNER_TEMP/focused-test.log"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            test "$status" -ne 0
+            grep -F 'FAILED' "$RUNNER_TEMP/focused-test.log"
+          else
+            test "$status" -eq 0
+            grep -F 'test result: ok' "$RUNNER_TEMP/focused-test.log"
+          fi
+
+      - name: Upload metadata-only native evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
+        with:
+          name: den-2998-${{ matrix.label }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/path-host-semantics.log
+            ${{ runner.temp }}/focused-test.log
+          if-no-files-found: error
+          retention-days: 14
