@@ -72,7 +72,7 @@ jobs:
 
           fn main() {
               let path = env::var("PRODUCT_MANIFEST").unwrap();
-              let canonical = fs::read_to_string(path).unwrap();
+              let canonical = fs::read_to_string(path).unwrap().replace("\r\n", "\n");
               let parsed = Manifest::parse(&canonical).expect("shipped canonical manifest must parse");
               assert_eq!(parsed.target_package_name("repository").as_deref(), Some("zed-interfaces"));
 
@@ -227,6 +227,7 @@ jobs:
           probe='printf "%s|%s|%s|%s|%s|%s\n" "$ZED_PKG_CONTEXT_DUMB" "$ZED_PKG_CONTEXT_CAN_PROMPT" "$ZED_PKG_CONTEXT_OUTPUT_MODE" "$ZED_PKG_CONTEXT_COLOR_STDOUT" "$ZED_PKG_CONTEXT_COLOR_STDERR" "$ZED_PKG_CONTEXT_HYPERLINKS"'
 
           normal="$(env -u NO_COLOR -u FORCE_COLOR -u CLICOLOR_FORCE -u CLICOLOR \
+            -u TERM_PROGRAM -u WT_SESSION -u VTE_VERSION -u TMUX \
             ZED_PKG_FORCE_STDIN_TTY=1 \
             ZED_PKG_FORCE_STDOUT_TTY=1 \
             ZED_PKG_FORCE_STDERR_TTY=1 \
@@ -237,6 +238,7 @@ jobs:
           test "$normal" = 'false|true|human|true|true|false'
 
           dumb="$(env -u NO_COLOR -u FORCE_COLOR -u CLICOLOR_FORCE -u CLICOLOR \
+            -u TERM_PROGRAM -u WT_SESSION -u VTE_VERSION -u TMUX \
             ZED_PKG_FORCE_STDIN_TTY=1 \
             ZED_PKG_FORCE_STDOUT_TTY=1 \
             ZED_PKG_FORCE_STDERR_TTY=1 \
