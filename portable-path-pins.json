@@ -1,11 +1,21 @@
 {
   "issue": "DEN-2998",
+  "expect_fixed": true,
   "source": {
     "repository": "zed-pkg/zed-interfaces",
-    "commit": "5f915e19bee6e1bbd45a90fe3190d4eaa6b539ba",
-    "environment_lock_blob": "b4ab7fde4497df17452281789df8c8f505e18abb"
+    "branch": "agent/den-2998-portable-path-lexical",
+    "commit": "a15cc23722bebe91225630d2e8407b72c375ba1b",
+    "file": "src/environment_lock.rs",
+    "environment_lock_blob": "b4ab7fde4497df17452281789df8c8f505e18abb",
+    "patch": ".github/patches/den-2998-portable-path.patch",
+    "patch_blob": "b60407247f60d3d932a2fec26d0144b0b27edff7"
+  },
+  "focused_tests": {
+    "unsafe": "environment_lock::tests::unsafe_install_paths_are_rejected_cross_platform",
+    "safe": "environment_lock::tests::valid_relative_install_paths_are_accepted_cross_platform"
   },
   "known_bad": {
+    "source_commit": "5f915e19bee6e1bbd45a90fe3190d4eaa6b539ba",
     "test": "environment_lock::tests::unsafe_install_paths_are_rejected_cross_platform",
     "linux_expected": "pass",
     "windows_expected": "fail",
@@ -14,9 +24,11 @@
   },
   "repair_acceptance": [
     "Reject Unix-rooted paths on Linux and Windows",
-    "Reject Windows drive-qualified and UNC paths on Linux and Windows",
+    "Reject Windows drive-qualified, drive-relative, rooted, UNC, and slash-UNC paths on Linux and Windows",
     "Reject parent traversal using either separator",
-    "Accept valid relative executable paths",
-    "Run the focused product test successfully on native Linux and Windows at one exact repaired source commit"
+    "Accept valid relative executable paths using either separator",
+    "Run the focused unsafe and safe product tests successfully on native Linux and Windows at one exact source commit plus patch blob",
+    "Run the complete native Rust suite on Linux and Windows",
+    "Run formatting, Clippy, documentation, and schema drift checks before source promotion"
   ]
 }
