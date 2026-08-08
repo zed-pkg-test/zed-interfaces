@@ -1,0 +1,392 @@
+name: Portable install-path validation contract
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/portable-install-path-contract.yml
+      - portable-path-pins.json
+      - tests/path-host-semantics.rs
+  push:
+    branches:
+      - agent/den-2998-portable-path-contract
+    paths:
+      - .github/workflows/portable-install-path-contract.yml
+      - portable-path-pins.json
+      - tests/path-host-semantics.rs
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: den-2998-portable-path-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  pin-contract:
+    name: Exact source and non-secret contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    outputs:
+      repository: ${{ steps.pin.outputs.repository }}
+      commit: ${{ steps.pin.outputs.commit }}
+      source_file: ${{ steps.pin.outputs.source_file }}
+      source_blob: ${{ steps.pin.outputs.source_blob }}
+      source_state: ${{ steps.pin.outputs.source_state }}
+      patch: ${{ steps.pin.outputs.patch }}
+      patch_blob: ${{ steps.pin.outputs.patch_blob }}
+      expect_fixed: ${{ steps.pin.outputs.expect_fixed }}
+      unsafe_test: ${{ steps.pin.outputs.unsafe_test }}
+      safe_test: ${{ steps.pin.outputs.safe_test }}
+    steps:
+      - name: Check out certification repository without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          show-progress: false
+
+      - name: Validate immutable baseline and repair acceptance
+        id: pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture=portable-path-pins.json
+          repository="$(jq -r '.source.repository' "$fixture")"
+          commit="$(jq -r '.source.commit' "$fixture")"
+          source_file="$(jq -r '.source.file // "src/environment_lock.rs"' "$fixture")"
+          source_blob="$(jq -r '.source.environment_lock_blob' "$fixture")"
+          source_state="$(jq -r '
+            if .source.state then .source.state
+            elif ((.source.patch // "") | length) > 0 then "patch-candidate"
+            elif (.expect_fixed // false) then "materialized-repair"
+            else "known-bad"
+            end
+          ' "$fixture")"
+          patch="$(jq -r '.source.patch // ""' "$fixture")"
+          patch_blob="$(jq -r '.source.patch_blob // ""' "$fixture")"
+          expect_fixed="$(jq -r '.expect_fixed // false' "$fixture")"
+          unsafe_test="$(jq -r '.focused_tests.unsafe // .known_bad.test' "$fixture")"
+          safe_test="$(jq -r '.focused_tests.safe // ""' "$fixture")"
+
+          test "$(jq -r .issue "$fixture")" = DEN-2998
+          test "$repository" = zed-pkg/zed-interfaces
+          test "$source_file" = src/environment_lock.rs
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$source_blob" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$expect_fixed" = true || "$expect_fixed" = false ]]
+          case "$source_state" in
+            known-bad|patch-candidate|materialized-repair) ;;
+            *)
+              echo "::error::Unsupported source state: $source_state"
+              exit 1
+              ;;
+          esac
+          test "$unsafe_test" = environment_lock::tests::unsafe_install_paths_are_rejected_cross_platform
+          test "$(jq -r '.known_bad.escaping_case' "$fixture")" = /usr/bin
+          test "$(jq -r '.repair_acceptance | length' "$fixture")" -ge 5
+
+          if [ -n "$patch" ]; then
+            [[ "$patch" =~ ^\.github/patches/[A-Za-z0-9._/-]+\.patch$ ]]
+            [[ "$patch_blob" =~ ^[0-9a-f]{40}$ ]]
+            case "/$patch/" in
+              *'/../'*|*'/./'*)
+                echo '::error::Patch paths must remain beneath .github/patches.'
+                exit 1
+                ;;
+            esac
+          fi
+
+          if [ "$expect_fixed" = true ]; then
+            test "$safe_test" = environment_lock::tests::valid_relative_install_paths_are_accepted_cross_platform
+            case "$source_state" in
+              patch-candidate)
+                test -n "$patch"
+                test -n "$patch_blob"
+                ;;
+              materialized-repair)
+                test -z "$patch"
+                test -z "$patch_blob"
+                ;;
+              *)
+                echo '::error::A fixed expectation requires a patch candidate or materialized repair.'
+                exit 1
+                ;;
+            esac
+          else
+            test "$source_state" = known-bad
+            test -z "$patch"
+            test -z "$patch_blob"
+          fi
+
+          echo "repository=$repository" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "source_file=$source_file" >> "$GITHUB_OUTPUT"
+          echo "source_blob=$source_blob" >> "$GITHUB_OUTPUT"
+          echo "source_state=$source_state" >> "$GITHUB_OUTPUT"
+          echo "patch=$patch" >> "$GITHUB_OUTPUT"
+          echo "patch_blob=$patch_blob" >> "$GITHUB_OUTPUT"
+          echo "expect_fixed=$expect_fixed" >> "$GITHUB_OUTPUT"
+          echo "unsafe_test=$unsafe_test" >> "$GITHUB_OUTPUT"
+          echo "safe_test=$safe_test" >> "$GITHUB_OUTPUT"
+
+      - name: Measure the portable host-parser counterexample
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --edition 2021 tests/path-host-semantics.rs \
+            -o "$RUNNER_TEMP/path-host-semantics-contract"
+          "$RUNNER_TEMP/path-host-semantics-contract" > "$RUNNER_TEMP/contract-output.txt"
+          grep -F '/usr/bin|absolute=true|root=true' "$RUNNER_TEMP/contract-output.txt"
+
+      - name: Prove the canary is read-only and credential-free
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          workflow = Path('.github/workflows/portable-install-path-contract.yml').read_text()
+          assert 'permissions:\n  contents: read' in workflow
+          credential_setting = 'persist-' + 'credentials: false'
+          assert workflow.count(credential_setting) == 3
+          for forbidden in (
+              'contents' + ': write',
+              'pull_request' + '_target:',
+              'git' + ' push',
+              'secrets' + '.',
+              'ghp' + '_',
+              'lin_api' + '_',
+              'cfat' + '_',
+              'AWS_SECRET' + '_ACCESS_KEY',
+          ):
+              assert forbidden not in workflow, forbidden
+          PY
+
+  native-contract:
+    name: Native portable contract / ${{ matrix.label }}
+    needs: pin-contract
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            label: Linux
+          - os: windows-2025
+            label: Windows
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    env:
+      SOURCE_REPOSITORY: ${{ needs.pin-contract.outputs.repository }}
+      SOURCE_SHA: ${{ needs.pin-contract.outputs.commit }}
+      SOURCE_FILE: ${{ needs.pin-contract.outputs.source_file }}
+      SOURCE_BLOB: ${{ needs.pin-contract.outputs.source_blob }}
+      SOURCE_STATE: ${{ needs.pin-contract.outputs.source_state }}
+      PATCH: ${{ needs.pin-contract.outputs.patch }}
+      PATCH_BLOB: ${{ needs.pin-contract.outputs.patch_blob }}
+      EXPECT_FIXED: ${{ needs.pin-contract.outputs.expect_fixed }}
+      UNSAFE_TEST: ${{ needs.pin-contract.outputs.unsafe_test }}
+      SAFE_TEST: ${{ needs.pin-contract.outputs.safe_test }}
+    steps:
+      - name: Check out certification repository without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: cert
+          persist-credentials: false
+          show-progress: false
+
+      - name: Check out exact public product source without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact source commit, source blob, and optional patch blob
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git hash-object "source/$SOURCE_FILE")" = "$SOURCE_BLOB"
+          if [ -n "$PATCH" ]; then
+            test -f "source/$PATCH"
+            test "$(git hash-object "source/$PATCH")" = "$PATCH_BLOB"
+          else
+            test -z "$PATCH_BLOB"
+          fi
+
+      - name: Apply or verify the immutable lexical repair
+        id: apply
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch_sha256=''
+          if [ -n "$PATCH" ]; then
+            patch_sha256="$(sha256sum "source/$PATCH" | awk '{print $1}')"
+            (
+              cd source
+              git apply --check --whitespace=error-all "$PATCH"
+              git apply --whitespace=error-all "$PATCH"
+              git diff --check
+            )
+          fi
+
+          if [ "$EXPECT_FIXED" = true ]; then
+            case "$SOURCE_STATE" in
+              patch-candidate)
+                test -n "$patch_sha256"
+                ;;
+              materialized-repair)
+                test -z "$patch_sha256"
+                git -C source diff --quiet
+                ;;
+              *)
+                echo "::error::Unexpected fixed source state: $SOURCE_STATE"
+                exit 1
+                ;;
+            esac
+            ! grep -F 'Path::new(value).is_absolute()' "source/$SOURCE_FILE"
+            grep -F 'let rooted = value.starts_with' "source/$SOURCE_FILE"
+            grep -F 'valid_relative_install_paths_are_accepted_cross_platform' "source/$SOURCE_FILE"
+          else
+            test "$SOURCE_STATE" = known-bad
+            grep -F 'Path::new(value).is_absolute()' "source/$SOURCE_FILE"
+          fi
+          echo "patch_sha256=$patch_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Install stable Rust from a pinned action
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: stable
+          components: rustfmt,clippy
+
+      - name: Measure native host parser semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            out="$RUNNER_TEMP/path-host-semantics.exe"
+          else
+            out="$RUNNER_TEMP/path-host-semantics"
+          fi
+          rustc --edition 2021 cert/tests/path-host-semantics.rs -o "$out"
+          "$out" | tee "$RUNNER_TEMP/path-host-semantics.log"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            grep -F '/usr/bin|absolute=false|root=true' "$RUNNER_TEMP/path-host-semantics.log"
+            grep -F 'C:\tool\bin|absolute=true|root=true' "$RUNNER_TEMP/path-host-semantics.log"
+          else
+            grep -F '/usr/bin|absolute=true|root=true' "$RUNNER_TEMP/path-host-semantics.log"
+            grep -F 'C:\tool\bin|absolute=false|root=false' "$RUNNER_TEMP/path-host-semantics.log"
+          fi
+
+      - name: Reproduce the baseline or certify the focused repair
+        id: focused
+        working-directory: source
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          cargo test --locked "$UNSAFE_TEST" -- --exact --nocapture \
+            > "$RUNNER_TEMP/unsafe-test.log" 2>&1
+          unsafe_status=$?
+          set -e
+          cat "$RUNNER_TEMP/unsafe-test.log"
+          grep -F "$UNSAFE_TEST" "$RUNNER_TEMP/unsafe-test.log"
+
+          if [ "$EXPECT_FIXED" = true ]; then
+            test "$unsafe_status" -eq 0
+            cargo test --locked "$SAFE_TEST" -- --exact --nocapture \
+              2>&1 | tee "$RUNNER_TEMP/safe-test.log"
+            grep -F "$SAFE_TEST" "$RUNNER_TEMP/safe-test.log"
+            echo 'observation=fixed' >> "$GITHUB_OUTPUT"
+          elif [[ "$RUNNER_OS" == Windows ]]; then
+            test "$unsafe_status" -ne 0
+            grep -F FAILED "$RUNNER_TEMP/unsafe-test.log"
+            echo 'observation=defect-reproduced' >> "$GITHUB_OUTPUT"
+          else
+            test "$unsafe_status" -eq 0
+            grep -F 'test result: ok' "$RUNNER_TEMP/unsafe-test.log"
+            echo 'observation=host-dependent-pass' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run the full native test suite for repaired candidates
+        if: needs.pin-contract.outputs.expect_fixed == 'true'
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --check
+          cargo test --locked
+          cargo test --locked --doc
+
+      - name: Run Linux-only source quality and schema checks
+        if: needs.pin-contract.outputs.expect_fixed == 'true' && runner.os == 'Linux'
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo run --locked --example generate_schemas
+          git diff --check
+          git diff --exit-code -- schemas/
+
+      - name: Record machine-readable native evidence
+        if: always()
+        shell: bash
+        env:
+          PATCH_SHA256: ${{ steps.apply.outputs.patch_sha256 }}
+          OBSERVATION: ${{ steps.focused.outputs.observation }}
+          TEST_SHA: ${{ github.sha }}
+          MATRIX_LABEL: ${{ matrix.label }}
+        run: |
+          set -euo pipefail
+          mkdir -p cert/evidence
+          jq -n \
+            --arg source_repository "$SOURCE_REPOSITORY" \
+            --arg source_sha "$SOURCE_SHA" \
+            --arg source_blob "$SOURCE_BLOB" \
+            --arg source_state "$SOURCE_STATE" \
+            --arg patch "$PATCH" \
+            --arg patch_blob "$PATCH_BLOB" \
+            --arg patch_sha256 "$PATCH_SHA256" \
+            --arg test_sha "$TEST_SHA" \
+            --arg platform "$MATRIX_LABEL" \
+            --arg observation "$OBSERVATION" \
+            --argjson expect_fixed "$EXPECT_FIXED" \
+            '{
+              schema_version: 3,
+              linear: "DEN-2998",
+              source_repository: $source_repository,
+              source_sha: $source_sha,
+              source_blob: $source_blob,
+              source_state: $source_state,
+              patch: (if $patch == "" then null else $patch end),
+              patch_blob: (if $patch_blob == "" then null else $patch_blob end),
+              patch_sha256: (if $patch_sha256 == "" then null else $patch_sha256 end),
+              test_repository: "zed-pkg-test/zed-interfaces",
+              test_sha: $test_sha,
+              platform: $platform,
+              expect_fixed: $expect_fixed,
+              observation: $observation,
+              contract: "portable install paths are classified lexically, independently of the host parser"
+            }' | tee "cert/evidence/den-2998-${MATRIX_LABEL}.json"
+
+      - name: Upload metadata-only native evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
+        with:
+          name: den-2998-${{ matrix.label }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            cert/evidence/den-2998-${{ matrix.label }}.json
+            ${{ runner.temp }}/path-host-semantics.log
+            ${{ runner.temp }}/unsafe-test.log
+            ${{ runner.temp }}/safe-test.log
+          if-no-files-found: warn
+          retention-days: 14

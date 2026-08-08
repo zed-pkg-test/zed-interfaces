@@ -1,0 +1,33 @@
+{
+  "issue": "DEN-2998",
+  "expect_fixed": true,
+  "source": {
+    "repository": "zed-pkg/zed-interfaces",
+    "branch": "agent/den-2998-portable-path-lexical",
+    "state": "materialized-repair",
+    "commit": "7869cc0681cc7ea24c306157dd4f876203f03af1",
+    "file": "src/environment_lock.rs",
+    "environment_lock_blob": "6e048314d43fed763f15435bebbcb959a6a4bd19"
+  },
+  "focused_tests": {
+    "unsafe": "environment_lock::tests::unsafe_install_paths_are_rejected_cross_platform",
+    "safe": "environment_lock::tests::valid_relative_install_paths_are_accepted_cross_platform"
+  },
+  "known_bad": {
+    "source_commit": "5f915e19bee6e1bbd45a90fe3190d4eaa6b539ba",
+    "test": "environment_lock::tests::unsafe_install_paths_are_rejected_cross_platform",
+    "linux_expected": "pass",
+    "windows_expected": "fail",
+    "escaping_case": "/usr/bin",
+    "reason": "On Windows std::path::Path::is_absolute returns false for a rooted path without a drive prefix; portable validation must reject leading separators lexically rather than delegating to the host parser."
+  },
+  "repair_acceptance": [
+    "Reject Unix-rooted paths on Linux and Windows",
+    "Reject Windows drive-qualified, drive-relative, rooted, UNC, and slash-UNC paths on Linux and Windows",
+    "Reject parent traversal using either separator",
+    "Accept valid relative executable paths using either separator",
+    "Run the focused unsafe and safe product tests successfully on native Linux and Windows at one exact materialized source commit",
+    "Run the complete native Rust suite on Linux and Windows",
+    "Run formatting, Clippy, documentation, schema generation, and schema drift checks before source promotion"
+  ]
+}
