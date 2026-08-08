@@ -1,0 +1,328 @@
+name: Post-merge polyglot consumer acceptance
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/post-merge-consumer-acceptance.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: den-3160-post-merge-consumer-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  INTERFACES_REF: 92f046e393e7b421e9eea1afcc6c028ff8eb5859
+  CLI_REF: 5d1d13119be5784f545a7d812cdfaae3ca120693
+  RUST_TOOLCHAIN: 1.97.1
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cargo-git-consumer:
+    name: Cargo git consumer / ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            label: Linux
+          - os: macos-15
+            label: macOS
+          - os: windows-2025
+            label: Windows
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out certification repository without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: cert
+          persist-credentials: false
+          show-progress: false
+          fetch-depth: 1
+
+      - name: Check out exact merged interfaces tree without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: zed-pkg/zed-interfaces
+          ref: ${{ env.INTERFACES_REF }}
+          path: product
+          persist-credentials: false
+          show-progress: false
+          fetch-depth: 1
+
+      - name: Install fixed Rust toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+          rustc --version --verbose
+          cargo --version --verbose
+
+      - name: Verify immutable merged input
+        run: |
+          set -euo pipefail
+          test "$(git -C product rev-parse HEAD)" = "$INTERFACES_REF"
+          test -f product/Cargo.toml
+          test -f product/src/rust/Cargo.toml
+          test -f product/.zpkg.toml
+          test ! -e product/src/manifest.rs
+          git -C product diff --exit-code
+
+      - name: Create a fresh external Git consumer
+        run: |
+          set -euo pipefail
+          mkdir -p consumer/src
+          cat > consumer/Cargo.toml <<EOF
+          [package]
+          name = "zed-interfaces-post-merge-consumer"
+          version = "0.0.0"
+          edition = "2024"
+          publish = false
+
+          [dependencies]
+          zed-interfaces = { git = "https://github.com/zed-pkg/zed-interfaces", rev = "$INTERFACES_REF" }
+          EOF
+          cat > consumer/src/main.rs <<'EOF'
+          use std::{env, fs};
+          use zed_interfaces::manifest::Manifest;
+
+          fn main() {
+              let source = fs::read_to_string(env::var("PRODUCT_MANIFEST").unwrap()).unwrap();
+              let manifest = Manifest::parse(&source).unwrap();
+              assert_eq!(manifest.full_name(), "zed-pkg/zed-interfaces");
+              assert_eq!(manifest.target_package_name("repository").as_deref(), Some("zed-interfaces"));
+              assert_eq!(manifest.target_package_name("rust").as_deref(), Some("zed-interfaces-rust"));
+              assert_eq!(manifest.target_package_name("dart").as_deref(), Some("zed-interfaces-dart"));
+              assert_eq!(manifest.target_package_name("typescript").as_deref(), Some("zed-interfaces-typescript"));
+
+              let repository = manifest.targets.get("repository").unwrap();
+              assert_eq!(repository.dir, ".");
+              assert!(repository.name.is_none());
+
+              let rust = manifest.manifest_for_target("rust").unwrap();
+              assert_eq!(rust.package.name, "zed-interfaces-rust");
+              let dart = manifest.manifest_for_target("dart").unwrap();
+              assert_eq!(dart.package.name, "zed-interfaces-dart");
+              let typescript = manifest.manifest_for_target("typescript").unwrap();
+              assert_eq!(typescript.package.name, "zed-interfaces-typescript");
+          }
+          EOF
+
+      - name: Resolve the root virtual workspace as a Git dependency
+        working-directory: consumer
+        env:
+          PRODUCT_MANIFEST: ${{ github.workspace }}/product/.zpkg.toml
+        run: |
+          set -euo pipefail
+          cargo generate-lockfile
+          grep -F 'git+https://github.com/zed-pkg/zed-interfaces' Cargo.lock
+          grep -F "$INTERFACES_REF" Cargo.lock
+          cargo run --locked
+          CARGO_NET_OFFLINE=true cargo run --locked
+
+      - name: Prove consumer execution left the product tree untouched
+        run: |
+          set -euo pipefail
+          git -C product diff --exit-code
+          git -C product diff --cached --exit-code
+          test -z "$(git -C product ls-files --others --exclude-standard)"
+
+  terminal-context-child:
+    name: Terminal context child propagation / ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            label: Linux
+          - os: macos-15
+            label: macOS
+          - os: windows-2025
+            label: Windows
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out certification repository without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: cert
+          persist-credentials: false
+          show-progress: false
+          fetch-depth: 1
+
+      - name: Check out exact CLI without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: zed-pkg/zed-cli
+          ref: ${{ env.CLI_REF }}
+          path: cli
+          persist-credentials: false
+          show-progress: false
+          fetch-depth: 1
+
+      - name: Install fixed Rust toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: Build the exact CLI
+        working-directory: cli
+        run: cargo build --release --locked --bin zed
+
+      - name: Verify terminal context reaches real child processes
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            ZED="$GITHUB_WORKSPACE/cli/target/release/zed.exe"
+          else
+            ZED="$GITHUB_WORKSPACE/cli/target/release/zed"
+          fi
+          test -x "$ZED"
+          CHILD_BASH="$(command -v bash)"
+          test -n "$CHILD_BASH"
+
+          probe='printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n" "$ZED_PKG_CONTEXT_VERSION" "$ZED_PKG_CONTEXT_STDIN_TTY" "$ZED_PKG_CONTEXT_STDOUT_TTY" "$ZED_PKG_CONTEXT_STDERR_TTY" "$ZED_PKG_CONTEXT_CAN_PROMPT" "$ZED_PKG_CONTEXT_CI" "$ZED_PKG_CONTEXT_OUTPUT_MODE" "$ZED_PKG_CONTEXT_SHELL" "$ZED_PKG_CONTEXT_SHELL_SOURCE" "$ZED_PKG_CONTEXT_NESTED" "$ZED_PKG_CONTEXT_COLUMNS"'
+
+          ci_context="$(env \
+            ZED_PKG_FORCE_STDIN_TTY=1 \
+            ZED_PKG_FORCE_STDOUT_TTY=1 \
+            ZED_PKG_FORCE_STDERR_TTY=1 \
+            ZED_PKG_FORCE_CI=1 \
+            ZED_PKG_SHELL=bash \
+            TERM=xterm-256color \
+            COLUMNS=132 \
+            "$ZED" run "$CHILD_BASH" -c "$probe")"
+          test "$ci_context" = '1|true|true|true|false|true|plain|bash|override|false|132'
+
+          tty_context="$(env \
+            ZED_PKG_FORCE_STDIN_TTY=1 \
+            ZED_PKG_FORCE_STDOUT_TTY=1 \
+            ZED_PKG_FORCE_STDERR_TTY=1 \
+            ZED_PKG_FORCE_CI=0 \
+            ZED_PKG_SHELL=bash \
+            TERM=xterm-256color \
+            COLUMNS=132 \
+            "$ZED" run "$CHILD_BASH" -c "$probe")"
+          test "$tty_context" = '1|true|true|true|true|false|human|bash|override|false|132'
+
+          nested_context="$(env \
+            ZED_PKG_FORCE_STDIN_TTY=1 \
+            ZED_PKG_FORCE_STDOUT_TTY=1 \
+            ZED_PKG_FORCE_STDERR_TTY=1 \
+            ZED_PKG_FORCE_CI=0 \
+            ZED_PKG_SHELL=bash \
+            TERM=xterm-256color \
+            COLUMNS=132 \
+            "$ZED" run "$ZED" run "$CHILD_BASH" -c "$probe")"
+          test "$nested_context" = '1|true|true|true|true|false|human|bash|override|true|132'
+
+      - name: Verify exact CLI checkout remained read-only
+        run: |
+          set -euo pipefail
+          git -C cli diff --exit-code
+          git -C cli diff --cached --exit-code
+          test -z "$(git -C cli ls-files --others --exclude-standard | grep -v '^target/' || true)"
+
+  root-package-r2g:
+    name: Real root-package r2g / Linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out certification repository without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: cert
+          persist-credentials: false
+          show-progress: false
+          fetch-depth: 1
+
+      - name: Check out exact merged interfaces tree without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: zed-pkg/zed-interfaces
+          ref: ${{ env.INTERFACES_REF }}
+          path: product
+          persist-credentials: false
+          show-progress: false
+          fetch-depth: 1
+
+      - name: Check out exact CLI without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: zed-pkg/zed-cli
+          ref: ${{ env.CLI_REF }}
+          path: cli
+          persist-credentials: false
+          show-progress: false
+          fetch-depth: 1
+
+      - name: Install fixed Rust toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: Build exact Zed CLI
+        working-directory: cli
+        run: cargo build --release --locked --bin zed
+
+      - name: Roundtrip the merged root package through a throwaway file registry
+        working-directory: product
+        env:
+          ZED_PKG_FORCE_CI: "1"
+        run: |
+          set -euo pipefail
+          ZED="$GITHUB_WORKSPACE/cli/target/release/zed"
+          test -x "$ZED"
+          "$ZED" \
+            --home "$RUNNER_TEMP/zed-home" \
+            r2g \
+            --r2g-root "$RUNNER_TEMP/interfaces-r2g" \
+            --clean
+
+      - name: Prove r2g did not mutate the merged source checkout
+        run: |
+          set -euo pipefail
+          git -C product diff --exit-code
+          git -C product diff --cached --exit-code
+          test -z "$(git -C product ls-files --others --exclude-standard)"
+
+  read-only-policy:
+    name: Read-only acceptance policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out certification repository without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          show-progress: false
+          fetch-depth: 1
+
+      - name: Enforce credential-free fixed-runner contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow=.github/workflows/post-merge-consumer-acceptance.yml
+          test -f "$workflow"
+          ! grep -Eq 'secrets\.|pull_request_target|persist-credentials:[[:space:]]*true|[a-z]+-latest' "$workflow"
+          grep -F 'permissions:' "$workflow"
+          grep -F 'contents: read' "$workflow"
+          grep -F 'ubuntu-24.04' "$workflow"
+          grep -F 'macos-15' "$workflow"
+          grep -F 'windows-2025' "$workflow"
+          grep -F "$INTERFACES_REF" "$workflow"
+          grep -F "$CLI_REF" "$workflow"
