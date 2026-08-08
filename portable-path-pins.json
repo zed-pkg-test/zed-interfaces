@@ -4,11 +4,10 @@
   "source": {
     "repository": "zed-pkg/zed-interfaces",
     "branch": "agent/den-2998-portable-path-lexical",
-    "commit": "a68e4cf5a53d1aa0f726ce098fc671a479ae9759",
+    "state": "materialized-repair",
+    "commit": "7869cc0681cc7ea24c306157dd4f876203f03af1",
     "file": "src/environment_lock.rs",
-    "environment_lock_blob": "b4ab7fde4497df17452281789df8c8f505e18abb",
-    "patch": ".github/patches/den-2998-portable-path.patch",
-    "patch_blob": "08efc40dcfb7eefb584fcebd1bf7c64d20fc0ded"
+    "environment_lock_blob": "6e048314d43fed763f15435bebbcb959a6a4bd19"
   },
   "focused_tests": {
     "unsafe": "environment_lock::tests::unsafe_install_paths_are_rejected_cross_platform",
@@ -27,8 +26,8 @@
     "Reject Windows drive-qualified, drive-relative, rooted, UNC, and slash-UNC paths on Linux and Windows",
     "Reject parent traversal using either separator",
     "Accept valid relative executable paths using either separator",
-    "Run the focused unsafe and safe product tests successfully on native Linux and Windows at one exact source commit plus patch blob",
+    "Run the focused unsafe and safe product tests successfully on native Linux and Windows at one exact materialized source commit",
     "Run the complete native Rust suite on Linux and Windows",
-    "Run formatting, Clippy, documentation, and schema drift checks before source promotion"
+    "Run formatting, Clippy, documentation, schema generation, and schema drift checks before source promotion"
   ]
 }
