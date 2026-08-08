@@ -1,5 +1,5 @@
 [package]
-org = "zed-pkg"
+org = "zed-pkg-test"
 name = "zed-interfaces"
 version = "0.1.0"
 description = "Core manifest, lockfile, registry, version, and package-model interfaces for zed-pkg"
