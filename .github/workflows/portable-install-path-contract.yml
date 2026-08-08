@@ -116,7 +116,8 @@ jobs:
           from pathlib import Path
           workflow = Path('.github/workflows/portable-install-path-contract.yml').read_text()
           assert 'permissions:\n  contents: read' in workflow
-          assert workflow.count('persist-credentials: false') == 3
+          credential_setting = 'persist-' + 'credentials: false'
+          assert workflow.count(credential_setting) == 3
           for forbidden in (
               'contents' + ': write',
               'pull_request' + '_target:',
