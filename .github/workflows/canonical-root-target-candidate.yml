@@ -9,7 +9,7 @@ on:
       product_ref:
         description: Exact 40-character zed-pkg/zed-interfaces commit to certify
         required: false
-        default: 66768b3f544c03f392d13ea812006c1efc93590b
+        default: a8a7a9bf45da256205ffa2d9cc76ac52145aa309
         type: string
 
 permissions:
@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PRODUCT_REF: ${{ inputs.product_ref || '66768b3f544c03f392d13ea812006c1efc93590b' }}
+  PRODUCT_REF: ${{ inputs.product_ref || 'a8a7a9bf45da256205ffa2d9cc76ac52145aa309' }}
   CARGO_TERM_COLOR: always
 
 jobs:
