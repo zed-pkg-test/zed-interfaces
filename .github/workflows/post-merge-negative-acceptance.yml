@@ -1,0 +1,282 @@
+name: Post-merge mutation and non-vacuity acceptance
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/post-merge-negative-acceptance.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: den-3168-negative-acceptance-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  INTERFACES_REF: 92f046e393e7b421e9eea1afcc6c028ff8eb5859
+  CLI_REF: 5d1d13119be5784f545a7d812cdfaae3ca120693
+  RUST_TOOLCHAIN: 1.97.1
+  CARGO_TERM_COLOR: always
+
+jobs:
+  root-identity-mutation:
+    name: Conflicting root identity turns red / ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            label: Linux
+          - os: windows-2025
+            label: Windows
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out exact merged interfaces tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: zed-pkg/zed-interfaces
+          ref: ${{ env.INTERFACES_REF }}
+          path: product
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Install fixed Rust toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: Build an external manifest mutation probe
+        run: |
+          set -euo pipefail
+          mkdir -p probe/src
+          cat > probe/Cargo.toml <<'EOF'
+          [package]
+          name = "zed-interfaces-manifest-mutation-probe"
+          version = "0.0.0"
+          edition = "2024"
+          publish = false
+
+          [dependencies]
+          zed-interfaces = { path = "../product/src/rust" }
+          EOF
+          cat > probe/src/main.rs <<'EOF'
+          use std::{env, fs};
+          use zed_interfaces::manifest::Manifest;
+
+          fn main() {
+              let path = env::var("PRODUCT_MANIFEST").unwrap();
+              let canonical = fs::read_to_string(path).unwrap().replace("\r\n", "\n");
+              let parsed = Manifest::parse(&canonical).expect("shipped canonical manifest must parse");
+              assert_eq!(parsed.target_package_name("repository").as_deref(), Some("zed-interfaces"));
+
+              let marker = "[targets.repository]\ndir = \".\"";
+              assert_eq!(canonical.matches(marker).count(), 1, "expected one repository target marker");
+              let mutated = canonical.replacen(
+                  marker,
+                  "[targets.repository]\ndir = \".\"\nname = \"zed-interfaces-repository\"",
+                  1,
+              );
+              let error = Manifest::parse(&mutated)
+                  .expect_err("conflicting root-target name must fail closed");
+              let message = error.to_string();
+              assert!(message.contains("whole-repository target"), "{message}");
+              assert!(message.contains("zed-interfaces"), "{message}");
+              assert!(message.contains("zed-interfaces-repository"), "{message}");
+          }
+          EOF
+
+      - name: Prove canonical passes and mutation fails closed
+        working-directory: probe
+        env:
+          PRODUCT_MANIFEST: ${{ github.workspace }}/product/.zpkg.toml
+        run: cargo run
+
+      - name: Prove exact product checkout stayed unchanged
+        run: |
+          set -euo pipefail
+          test "$(git -C product rev-parse HEAD)" = "$INTERFACES_REF"
+          git -C product diff --exit-code
+          git -C product diff --cached --exit-code
+          test -z "$(git -C product ls-files --others --exclude-standard)"
+
+  r2g-smoke-mutation:
+    name: Missing polyglot slice turns r2g red / Linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out exact merged interfaces tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: zed-pkg/zed-interfaces
+          ref: ${{ env.INTERFACES_REF }}
+          path: product
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Check out exact Zed CLI
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: zed-pkg/zed-cli
+          ref: ${{ env.CLI_REF }}
+          path: cli
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Install fixed Rust toolchain and build exact CLI
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+          cargo build --release --locked --bin zed --manifest-path cli/Cargo.toml
+
+      - name: Positive control — intact merged package passes r2g
+        working-directory: product
+        env:
+          ZED_PKG_FORCE_CI: "1"
+        run: |
+          set -euo pipefail
+          ZED="$GITHUB_WORKSPACE/cli/target/release/zed"
+          "$ZED" --home "$RUNNER_TEMP/control-home" r2g \
+            --r2g-root "$RUNNER_TEMP/control-r2g" --clean
+
+      - name: Mutation — missing Dart slice must make the same r2g flow fail
+        run: |
+          set -euo pipefail
+          mutant="$RUNNER_TEMP/mutant"
+          mkdir -p "$mutant"
+          cp -a product/. "$mutant/"
+          test -f "$mutant/src/dart/lib/zed_interfaces.dart"
+          rm "$mutant/src/dart/lib/zed_interfaces.dart"
+          test ! -e "$mutant/src/dart/lib/zed_interfaces.dart"
+          ZED="$GITHUB_WORKSPACE/cli/target/release/zed"
+          set +e
+          (
+            cd "$mutant"
+            ZED_PKG_FORCE_CI=1 "$ZED" --home "$RUNNER_TEMP/mutant-home" r2g \
+              --r2g-root "$RUNNER_TEMP/mutant-r2g" --clean
+          ) > "$RUNNER_TEMP/mutant-r2g.log" 2>&1
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/mutant-r2g.log"
+          test "$status" -ne 0
+
+      - name: Prove exact source checkouts stayed unchanged
+        run: |
+          set -euo pipefail
+          test "$(git -C product rev-parse HEAD)" = "$INTERFACES_REF"
+          test "$(git -C cli rev-parse HEAD)" = "$CLI_REF"
+          git -C product diff --exit-code
+          git -C cli diff --exit-code
+
+  dumb-terminal-fail-closed:
+    name: Dumb terminal suppresses prompt and styling / ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            label: Linux
+          - os: macos-15
+            label: macOS
+          - os: windows-2025
+            label: Windows
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out exact Zed CLI
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: zed-pkg/zed-cli
+          ref: ${{ env.CLI_REF }}
+          path: cli
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Install fixed Rust toolchain and build exact CLI
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+          cargo build --release --locked --bin zed --manifest-path cli/Cargo.toml
+
+      - name: Positive control and dumb-terminal assertion
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            ZED="$GITHUB_WORKSPACE/cli/target/release/zed.exe"
+          else
+            ZED="$GITHUB_WORKSPACE/cli/target/release/zed"
+          fi
+          CHILD_BASH="$(command -v bash)"
+          probe='printf "%s|%s|%s|%s|%s|%s\n" "$ZED_PKG_CONTEXT_DUMB" "$ZED_PKG_CONTEXT_CAN_PROMPT" "$ZED_PKG_CONTEXT_OUTPUT_MODE" "$ZED_PKG_CONTEXT_COLOR_STDOUT" "$ZED_PKG_CONTEXT_COLOR_STDERR" "$ZED_PKG_CONTEXT_HYPERLINKS"'
+
+          normal="$(env -u NO_COLOR -u FORCE_COLOR -u CLICOLOR_FORCE -u CLICOLOR \
+            -u TERM_PROGRAM -u WT_SESSION -u VTE_VERSION -u TMUX \
+            ZED_PKG_FORCE_STDIN_TTY=1 \
+            ZED_PKG_FORCE_STDOUT_TTY=1 \
+            ZED_PKG_FORCE_STDERR_TTY=1 \
+            ZED_PKG_FORCE_CI=0 \
+            ZED_PKG_SHELL=bash \
+            TERM=xterm-256color \
+            "$ZED" run "$CHILD_BASH" -c "$probe")"
+          test "$normal" = 'false|true|human|true|true|false'
+
+          dumb="$(env -u NO_COLOR -u FORCE_COLOR -u CLICOLOR_FORCE -u CLICOLOR \
+            -u TERM_PROGRAM -u WT_SESSION -u VTE_VERSION -u TMUX \
+            ZED_PKG_FORCE_STDIN_TTY=1 \
+            ZED_PKG_FORCE_STDOUT_TTY=1 \
+            ZED_PKG_FORCE_STDERR_TTY=1 \
+            ZED_PKG_FORCE_CI=0 \
+            ZED_PKG_SHELL=bash \
+            TERM=dumb \
+            "$ZED" run "$CHILD_BASH" -c "$probe")"
+          test "$dumb" = 'true|false|plain|false|false|false'
+
+      - name: Prove exact CLI checkout stayed read-only
+        run: |
+          set -euo pipefail
+          test "$(git -C cli rev-parse HEAD)" = "$CLI_REF"
+          git -C cli diff --exit-code
+          git -C cli diff --cached --exit-code
+          test -z "$(git -C cli ls-files --others --exclude-standard | grep -v '^target/' || true)"
+
+  read-only-policy:
+    name: Negative-suite policy ratchet
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out test repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          show-progress: false
+          fetch-depth: 1
+
+      - name: Enforce fixed-runner credential-free test policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow=.github/workflows/post-merge-negative-acceptance.yml
+          ! grep -Eq 'secrets\.|pull_request_target|persist-credentials:[[:space:]]*true|[a-z]+-latest' "$workflow"
+          grep -F 'contents: read' "$workflow"
+          grep -F 'ubuntu-24.04' "$workflow"
+          grep -F 'macos-15' "$workflow"
+          grep -F 'windows-2025' "$workflow"
+          grep -F "$INTERFACES_REF" "$workflow"
+          grep -F "$CLI_REF" "$workflow"
