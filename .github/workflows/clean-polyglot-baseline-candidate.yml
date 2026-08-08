@@ -1,0 +1,235 @@
+name: Clean polyglot baseline candidate certification
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/clean-polyglot-baseline-candidate.yml
+  workflow_dispatch:
+    inputs:
+      product_ref:
+        description: Exact 40-character zed-pkg/zed-interfaces commit to certify
+        required: false
+        default: 3884160215b3d5821a1977a7c8f3b958b3893003
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: den-2990-clean-polyglot-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  PRODUCT_REF: ${{ inputs.product_ref || '3884160215b3d5821a1977a7c8f3b958b3893003' }}
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-contract:
+    name: Current Rust contract / ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            label: Linux
+          - os: windows-2025
+            label: Windows
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out certification repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: cert
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Check out exact product candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: zed-pkg/zed-interfaces
+          ref: ${{ env.PRODUCT_REF }}
+          path: product
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify immutable ref and clean provenance surface
+        run: |
+          set -euo pipefail
+          [[ "$PRODUCT_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C product rev-parse HEAD)" = "$PRODUCT_REF"
+          test ! -e product/.claude
+          test ! -e product/.gemini
+          test ! -e product/.openai
+          test ! -e product/.github/workflows/den-2735-materialize.yml
+
+      - name: Install stable Rust with format and lint components
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version --verbose
+          cargo --version --verbose
+
+      - name: Verify workspace and moved current-main contracts
+        working-directory: product
+        run: |
+          set -euo pipefail
+          cargo metadata --locked --format-version=1 --no-deps > "$RUNNER_TEMP/metadata.json"
+          python - "$RUNNER_TEMP/metadata.json" <<'PY'
+          import json, pathlib, sys, tomllib
+          metadata = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          packages = [p for p in metadata['packages'] if p['name'] == 'zed-interfaces']
+          assert len(packages) == 1, packages
+          assert packages[0]['manifest_path'].replace('\\', '/').endswith('/src/rust/Cargo.toml')
+
+          manifest = tomllib.loads(pathlib.Path('.zpkg.toml').read_text())
+          repo = manifest['targets']['repository']
+          assert repo['dir'] == '.', repo
+          assert 'name' not in repo, repo
+          assert manifest['package']['name'] == 'zed-interfaces'
+          PY
+          test -f src/rust/dependency_graph.rs
+          test -f src/rust/tests/root_target_identity.rs
+          test -f src/rust/tests/own_manifest.rs
+          test ! -e src/dependency_graph.rs
+          test ! -e tests/root_target_identity.rs
+          test ! -e examples/generate_schemas.rs
+          ! grep -F 'name = "zed-interfaces-repository"' .zpkg.toml
+
+      - name: Format
+        working-directory: product
+        run: cargo fmt --all --check
+
+      - name: Strict Clippy
+        working-directory: product
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Full Rust tests
+        working-directory: product
+        run: cargo test --workspace --locked
+
+      - name: Rust doctests
+        working-directory: product
+        run: cargo test --workspace --locked --doc
+
+      - name: Explicit moved contract regressions
+        working-directory: product
+        run: |
+          set -euo pipefail
+          cargo test --locked --test own_manifest -- --nocapture
+          cargo test --locked --test root_target_identity -- --nocapture
+          cargo test --locked dependency_graph -- --nocapture
+
+  polyglot-drift:
+    name: Generated slices and wire contract / Linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out certification repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: cert
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Check out exact product candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: zed-pkg/zed-interfaces
+          ref: ${{ env.PRODUCT_REF }}
+          path: product
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify immutable product ref
+        run: |
+          set -euo pipefail
+          [[ "$PRODUCT_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C product rev-parse HEAD)" = "$PRODUCT_REF"
+
+      - name: Install stable Rust
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install Dart SDK
+        uses: dart-lang/setup-dart@e51d8e571e22473a2ddebf0ef8a2123f0ab2c02c # v1.7.1
+
+      - name: Validate schema classification
+        working-directory: product
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, pathlib
+          root = pathlib.Path('schemas')
+          index = json.loads((root / 'index.json').read_text())
+          files = {p.name for p in root.glob('*.json') if p.name != 'index.json'}
+          entries = index['schemas']
+          indexed = {entry['file'] for entry in entries}
+          assert files == indexed, (sorted(files - indexed), sorted(indexed - files))
+          for entry in entries:
+              assert isinstance(entry.get('targets'), list), entry
+              assert entry.get('why', '').strip(), entry
+          assert 'dependency-graph-v1.json' in indexed
+          PY
+
+      - name: Regenerate Rust-derived outputs and prove drift-free
+        working-directory: product
+        run: |
+          set -euo pipefail
+          cargo run --locked --example generate_schemas
+          cargo run --locked --example generate_fixtures
+          node --test codegen/generate.test.mjs
+          node codegen/generate.mjs --check
+          git diff --exit-code -- schemas fixtures src/dart src/ts
+
+      - name: Dart analyze and wire tests
+        working-directory: product/src/dart
+        run: |
+          set -euo pipefail
+          dart pub get
+          dart analyze --fatal-infos
+          dart test
+
+      - name: TypeScript typecheck and runtime wire tests
+        working-directory: product/src/ts
+        run: |
+          set -euo pipefail
+          npm install --no-save --package-lock=false typescript@5 @types/node
+          npx tsc --noEmit
+          node --test wire-format.test.ts
+
+      - name: Second-pass generated-output stability
+        working-directory: product
+        run: |
+          set -euo pipefail
+          cargo run --locked --example generate_schemas
+          cargo run --locked --example generate_fixtures
+          node codegen/generate.mjs --check
+          git diff --exit-code -- schemas fixtures src/dart src/ts
+
+      - name: Verify clean successor topology
+        working-directory: product
+        run: |
+          set -euo pipefail
+          test -f docs/polyglot-baseline-provenance.md
+          test -f src/rust/dependency_graph.rs
+          test -f src/rust/tests/root_target_identity.rs
+          test -f src/dart/lib/zed_interfaces.dart
+          test -f src/ts/index.ts
+          test ! -e .claude
+          test ! -e .gemini
+          test ! -e .openai
+          test ! -e .github/workflows/den-2735-materialize.yml
