@@ -1,0 +1,89 @@
+name: Validate lib-core fleet PR 38 with marker
+
+on:
+  push:
+    branches:
+      - test/lib-core-fleet-pr38-20260809
+    paths:
+      - ".github/workflows/lib-core-fleet-pr38-marker.yml"
+      - "fleet-under-test/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: validate-lib-core-fleet-pr38-marker
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+      MANIFEST_SHA256: 94a4e3b052a22c488c94a047c4072de955de430a89d3fbf50999c2bca80a28df
+    steps:
+      - name: Check out external validation harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: test/lib-core-fleet-pr38-20260809
+          fetch-depth: 0
+
+      - name: Verify runner Node.js
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          node -e 'const major=Number(process.versions.node.split(".")[0]); if (major < 20) process.exit(1)'
+
+      - name: Reconstruct exact fleet manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 --decode fleet-under-test/targets.json.gz.b64 | gzip -dc > fleet-under-test/targets.json
+          echo "$MANIFEST_SHA256  fleet-under-test/targets.json" | sha256sum -c -
+
+      - name: Validate exact manifest and tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check fleet-under-test/check.mjs
+          node --check fleet-under-test/bootstrap.mjs
+          node fleet-under-test/check.mjs
+          node fleet-under-test/bootstrap.mjs --help
+
+      - name: Exercise authenticated dry-run against test organization
+        shell: bash
+        run: |
+          set -euo pipefail
+          node fleet-under-test/bootstrap.mjs --target zed-pkg-test | tee /tmp/fleet-dry-run.txt
+          grep -F 'dry-run: 1 target(s)' /tmp/fleet-dry-run.txt
+          grep -F 'zed-pkg-test/zed-lib-core: create-required' /tmp/fleet-dry-run.txt
+          grep -E '^  zed-pkg-test/zed-interfaces@[0-9a-f]{40}$' /tmp/fleet-dry-run.txt
+
+      - name: Commit exact-head success marker
+        shell: bash
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          VALIDATED_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p validation-results
+          {
+            echo 'status=PASS'
+            echo "manifest_sha256=$MANIFEST_SHA256"
+            echo 'target=zed-pkg-test/zed-lib-core'
+            echo 'expected_repository_state=create-required'
+            echo "validated_commit=$VALIDATED_COMMIT"
+            echo "workflow_run_id=$RUN_ID"
+            echo "workflow_run_attempt=$RUN_ATTEMPT"
+            echo "node_version=$(node --version)"
+            grep -E '^  zed-pkg-test/zed-interfaces@[0-9a-f]{40}$' /tmp/fleet-dry-run.txt | sed 's/^  /source=/'
+          } > validation-results/lib-core-fleet-pr38.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add validation-results/lib-core-fleet-pr38.txt
+          git diff --cached --check
+          git commit -m 'test: record lib-core fleet PR 38 validation'
+          git push origin HEAD:test/lib-core-fleet-pr38-20260809
