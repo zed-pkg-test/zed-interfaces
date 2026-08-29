@@ -1,0 +1,45 @@
+name: Validate lib-core fleet PR 38
+
+on:
+  push:
+    branches:
+      - test/lib-core-fleet-pr38-20260809
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-lib-core-fleet-pr38
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out fleet controller branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ORESoftware/k8s-libs-and-shared-defs
+          ref: agent/den-2988-federated-domain-project-ownership
+          path: fleet
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - name: Validate exact manifest and tooling
+        working-directory: fleet
+        run: |
+          set -euo pipefail
+          node --check lib-core-fleet/check.mjs
+          node --check lib-core-fleet/bootstrap.mjs
+          node lib-core-fleet/check.mjs
+          node lib-core-fleet/bootstrap.mjs --help
+
+      - name: Dry-run the complete fleet
+        working-directory: fleet
+        run: node lib-core-fleet/bootstrap.mjs
