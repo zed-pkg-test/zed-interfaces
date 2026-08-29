@@ -8,6 +8,7 @@ on:
       - tests/path-host-semantics.rs
   push:
     branches:
+      - main
       - agent/den-2998-portable-path-contract
     paths:
       - .github/workflows/portable-install-path-contract.yml

@@ -1,15 +1,10 @@
 name: Validate lib-core fleet PR 38 with marker
 
 on:
-  push:
-    branches:
-      - test/lib-core-fleet-pr38-20260809
-    paths:
-      - ".github/workflows/lib-core-fleet-pr38-marker.yml"
-      - "fleet-under-test/**"
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: validate-lib-core-fleet-pr38-marker
@@ -28,6 +23,8 @@ jobs:
         with:
           ref: test/lib-core-fleet-pr38-20260809
           fetch-depth: 0
+          persist-credentials: false
+          show-progress: false
 
       - name: Verify runner Node.js
         shell: bash
@@ -61,7 +58,7 @@ jobs:
           grep -F 'zed-pkg-test/zed-lib-core: create-required' /tmp/fleet-dry-run.txt
           grep -E '^  zed-pkg-test/zed-interfaces@[0-9a-f]{40}$' /tmp/fleet-dry-run.txt
 
-      - name: Commit exact-head success marker
+      - name: Stage exact-head success marker
         shell: bash
         env:
           RUN_ID: ${{ github.run_id }}
@@ -81,9 +78,11 @@ jobs:
             echo "node_version=$(node --version)"
             grep -E '^  zed-pkg-test/zed-interfaces@[0-9a-f]{40}$' /tmp/fleet-dry-run.txt | sed 's/^  /source=/'
           } > validation-results/lib-core-fleet-pr38.txt
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add validation-results/lib-core-fleet-pr38.txt
-          git diff --cached --check
-          git commit -m 'test: record lib-core fleet PR 38 validation'
-          git push origin HEAD:test/lib-core-fleet-pr38-20260809
+
+      - name: Upload exact-head success marker
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lib-core-fleet-pr38-${{ github.run_id }}-${{ github.run_attempt }}
+          path: validation-results/lib-core-fleet-pr38.txt
+          if-no-files-found: error
+          retention-days: 30

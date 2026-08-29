@@ -1,9 +1,7 @@
 name: Validate lib-core fleet PR 38
 
 on:
-  push:
-    branches:
-      - test/lib-core-fleet-pr38-20260809
+  workflow_dispatch:
 
 permissions:
   contents: read
