@@ -191,6 +191,8 @@ jobs:
           CHILD_BASH="$(command -v bash)"
           test -n "$CHILD_BASH"
 
+          # The single quotes intentionally preserve variables for the child shell.
+          # shellcheck disable=SC2016
           probe='printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n" "$ZED_PKG_CONTEXT_VERSION" "$ZED_PKG_CONTEXT_STDIN_TTY" "$ZED_PKG_CONTEXT_STDOUT_TTY" "$ZED_PKG_CONTEXT_STDERR_TTY" "$ZED_PKG_CONTEXT_CAN_PROMPT" "$ZED_PKG_CONTEXT_CI" "$ZED_PKG_CONTEXT_OUTPUT_MODE" "$ZED_PKG_CONTEXT_SHELL" "$ZED_PKG_CONTEXT_SHELL_SOURCE" "$ZED_PKG_CONTEXT_NESTED" "$ZED_PKG_CONTEXT_COLUMNS"'
 
           ci_context="$(env \
@@ -318,7 +320,10 @@ jobs:
           set -euo pipefail
           workflow=.github/workflows/post-merge-consumer-acceptance.yml
           test -f "$workflow"
-          ! grep -Eq 'secrets\.|pull_request_target|persist-credentials:[[:space:]]*true|[a-z]+-latest' "$workflow"
+          if grep -Eq 'secrets\.|pull_request_target|persist-credentials:[[:space:]]*true|[a-z]+-latest' "$workflow"; then
+            echo 'consumer acceptance workflow violates the credential-free fixed-runner policy' >&2
+            exit 1
+          fi
           grep -F 'permissions:' "$workflow"
           grep -F 'contents: read' "$workflow"
           grep -F 'ubuntu-24.04' "$workflow"

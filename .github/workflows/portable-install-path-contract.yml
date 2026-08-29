@@ -121,16 +121,18 @@ jobs:
             test -z "$patch_blob"
           fi
 
-          echo "repository=$repository" >> "$GITHUB_OUTPUT"
-          echo "commit=$commit" >> "$GITHUB_OUTPUT"
-          echo "source_file=$source_file" >> "$GITHUB_OUTPUT"
-          echo "source_blob=$source_blob" >> "$GITHUB_OUTPUT"
-          echo "source_state=$source_state" >> "$GITHUB_OUTPUT"
-          echo "patch=$patch" >> "$GITHUB_OUTPUT"
-          echo "patch_blob=$patch_blob" >> "$GITHUB_OUTPUT"
-          echo "expect_fixed=$expect_fixed" >> "$GITHUB_OUTPUT"
-          echo "unsafe_test=$unsafe_test" >> "$GITHUB_OUTPUT"
-          echo "safe_test=$safe_test" >> "$GITHUB_OUTPUT"
+          {
+            echo "repository=$repository"
+            echo "commit=$commit"
+            echo "source_file=$source_file"
+            echo "source_blob=$source_blob"
+            echo "source_state=$source_state"
+            echo "patch=$patch"
+            echo "patch_blob=$patch_blob"
+            echo "expect_fixed=$expect_fixed"
+            echo "unsafe_test=$unsafe_test"
+            echo "safe_test=$safe_test"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Measure the portable host-parser counterexample
         shell: bash
@@ -252,7 +254,10 @@ jobs:
                 exit 1
                 ;;
             esac
-            ! grep -F 'Path::new(value).is_absolute()' "source/$SOURCE_FILE"
+            if grep -F 'Path::new(value).is_absolute()' "source/$SOURCE_FILE"; then
+              echo 'legacy host-dependent absolute-path check remains after repair' >&2
+              exit 1
+            fi
             grep -F 'let rooted = value.starts_with' "source/$SOURCE_FILE"
             grep -F 'valid_relative_install_paths_are_accepted_cross_platform' "source/$SOURCE_FILE"
           else
