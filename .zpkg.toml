@@ -27,6 +27,7 @@ exclude = [
   "**/target/**",
   "**/node_modules/**",
   "**/.dart_tool/**",
+  "pubspec.lock",
   "src/dart/pubspec.lock",
   "tmp/**",
   "**/*.log",
