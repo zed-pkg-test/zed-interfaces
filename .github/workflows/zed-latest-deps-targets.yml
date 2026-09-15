@@ -1,0 +1,68 @@
+name: Zed latest deps target proof
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-targets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ZED_PKG_INTERACTIVE: "false"
+    steps:
+      - name: Check out test package
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out exact compatible Zed CLI
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: zed-pkg/zed-cli
+          ref: 70e02eb7dc9a423d4465fd421ce5b150b16451b6
+          path: zed-cli
+          persist-credentials: false
+
+      - name: Build exact Zed CLI
+        working-directory: zed-cli
+        run: |
+          cargo build --locked --bin zed
+          mkdir -p "$HOME/.local/bin"
+          install -m 0755 target/debug/zed "$HOME/.local/bin/zed"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Set up Dart for declared dart target
+        uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d
+
+      - name: Resolve newest allowed Zed graph and require tracked-lock freshness
+        working-directory: source
+        run: |
+          set -euo pipefail
+          zed validate
+          zed install
+          git diff --exit-code -- .zpkg.lock
+          zed validate --require-lock
+          zed install --frozen
+          zed build
+
+      - name: Compile declared Rust target
+        working-directory: source
+        run: zed develop --no-install -c 'cd src/rust && cargo check --all-targets'
+
+      - name: Compile declared TypeScript target
+        working-directory: source
+        run: zed develop --no-install -c 'cd src/ts && npm install --ignore-scripts && npm run typecheck'
+
+      - name: Analyze declared Dart target
+        working-directory: source
+        run: zed develop --no-install -c 'cd src/dart && dart pub get && dart analyze'
+
+      - name: Pack all declared Zed targets
+        working-directory: source
+        run: zed pack --out "$RUNNER_TEMP/zed-target-proof"
