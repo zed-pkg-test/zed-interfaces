@@ -5,8 +5,8 @@
 /zed_modules/
 /.zed/pack/
 /.vendor/
-tmp
-temp
+tmp/
+temp/
 tmp/worktrees
 temp/worktrees
 
@@ -16,3 +16,6 @@ node_modules/
 src/dart/.dart_tool/
 src/dart/pubspec.lock
 src/dart/build/
+
+# machine-local symlink to ORESoftware/my-ai AGENTS.md; never committed
+.ores/
