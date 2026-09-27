@@ -1,0 +1,133 @@
+name: bmscl exact-head proof
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/bmscl-exact-head-proof.yml"
+      - "evidence/bmscl-exact-head-proof.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bmscl-exact-head-proof-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  green-heads:
+    name: green ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: pr47-dependency-safety-cas
+            sha: 9d5ad4fdb84577a94696da5f99ec464f401b400a
+          - name: pr48-source-analysis-cache
+            sha: 81b5a624864c20d3cd768ca43b03135e47b931b5
+          - name: pr52-tenant-source-snapshot
+            sha: 8d73190c20bef693a2a775c7b1670f1c71220ded
+    steps:
+      - name: Check out exact public BeamScale compiler head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: beamscale/bmscl-compiler
+          ref: ${{ matrix.sha }}
+          path: compiler
+          persist-credentials: false
+
+      - name: Verify exact checkout identity
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ matrix.sha }}
+        run: test "$(git -C compiler rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          components: rustfmt, clippy
+
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124
+        with:
+          otp-version: "29.1.1"
+          gleam-version: "1.18.1"
+          version-type: strict
+
+      - name: Format
+        working-directory: compiler
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        working-directory: compiler
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Full Rust test suite
+        working-directory: compiler
+        run: cargo test --all-targets
+
+      - name: Keep checkout clean
+        working-directory: compiler
+        run: git diff --exit-code
+
+  red-regressions:
+    name: red ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: pr53-cache-path-isolation
+            sha: 2b055da896be962da0cf80d9138a27ceb26023cb
+            test_target: safety_cache_path_isolation
+            test_name: store_does_not_create_cache_directories_through_symlinked_namespace
+          - name: pr55-dependency-walk-bounds
+            sha: 91c1166ca3b4f674908c79fd4ef6422ff262f418
+            test_target: dependency_source_limits
+            test_name: dependency_source_analysis_rejects_excessive_directory_depth
+    steps:
+      - name: Check out exact public BeamScale compiler head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: beamscale/bmscl-compiler
+          ref: ${{ matrix.sha }}
+          path: compiler
+          persist-credentials: false
+
+      - name: Verify exact checkout identity
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ matrix.sha }}
+        run: test "$(git -C compiler rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          components: rustfmt, clippy
+
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124
+        with:
+          otp-version: "29.1.1"
+          gleam-version: "1.18.1"
+          version-type: strict
+
+      - name: Prove the named security regression is currently red
+        working-directory: compiler
+        shell: bash
+        env:
+          TEST_TARGET: ${{ matrix.test_target }}
+          TEST_NAME: ${{ matrix.test_name }}
+        run: |
+          set +e
+          cargo test --test "$TEST_TARGET" "$TEST_NAME" -- --exact
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "expected red regression unexpectedly passed; refresh the blocker state" >&2
+            exit 1
+          fi
+          printf 'expected red regression reproduced with exit status %s\n' "$status"
+
+      - name: Keep checkout clean
+        working-directory: compiler
+        run: git diff --exit-code
